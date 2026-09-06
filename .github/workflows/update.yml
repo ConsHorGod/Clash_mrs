@@ -1,0 +1,422 @@
+name: Build China + Proxy Rules
+
+on:
+  workflow_dispatch:
+
+  schedule:
+    - cron: "30 22 * * *" # 每天北京时间 06:30
+
+  push:
+    branches:
+      - master
+
+    paths-ignore:
+      - "README.md"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+
+      # =========================================================
+      # 1. Checkout
+      # =========================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      # =========================================================
+      # 2. 安装 Mihomo
+      # =========================================================
+      - name: Install Mihomo
+        run: |
+          set -e
+
+          echo "Downloading latest Mihomo..."
+
+          MIHOMO_URL=$(curl -fsSL \
+            https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+            | jq -r '.assets[] | select(.name | test("mihomo-linux-amd64-compatible-v.*\\.gz$")) | .browser_download_url' \
+            | head -n 1)
+
+          if [ -z "$MIHOMO_URL" ] || [ "$MIHOMO_URL" = "null" ]; then
+            echo "Compatible build not found, trying standard amd64 build..."
+
+            MIHOMO_URL=$(curl -fsSL \
+              https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+              | jq -r '.assets[] | select(.name | test("mihomo-linux-amd64-v.*\\.gz$")) | .browser_download_url' \
+              | head -n 1)
+          fi
+
+          echo "Mihomo URL:"
+          echo "$MIHOMO_URL"
+
+          curl -fL "$MIHOMO_URL" -o mihomo.gz
+
+          gzip -d mihomo.gz
+
+          chmod +x mihomo
+
+          ./mihomo version
+
+
+      # =========================================================
+      # 3. 下载 ChinaMax Domain
+      # =========================================================
+      - name: Download ChinaMax Domain
+        run: |
+          set -e
+
+          curl -fsSL \
+            https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax_Domain.txt \
+            -o China_Domain.txt
+
+
+      # =========================================================
+      # 4. 下载 ChinaMax IP
+      # =========================================================
+      - name: Download ChinaMax IP
+        run: |
+          set -e
+
+          curl -fsSL \
+            https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/ChinaMax/ChinaMax_IP.txt \
+            -o China_IP.txt
+
+
+      # =========================================================
+      # 5. 下载 Proxy Classical
+      # =========================================================
+      - name: Download Proxy Classical
+        run: |
+          set -e
+
+          curl -fsSL \
+            https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/master/rule/Clash/Proxy/Proxy_Classical.yaml \
+            -o Proxy_Classical.yaml
+
+
+      # =========================================================
+      # 6. 提取 Proxy Domain
+      #
+      # DOMAIN
+      # DOMAIN-SUFFIX
+      # DOMAIN-KEYWORD
+      #
+      # 注意：
+      # MRS 的 domain 类型不支持 keyword。
+      # 因此这里会保留到 TXT，
+      # 但生成 MRS 时只转换真正的 DOMAIN / DOMAIN-SUFFIX。
+      # =========================================================
+      - name: Extract Proxy Domain
+        run: |
+          set -e
+
+          # DOMAIN / DOMAIN-SUFFIX
+          grep -E \
+            '^[[:space:]]*-[[:space:]]*(DOMAIN|DOMAIN-SUFFIX),' \
+            Proxy_Classical.yaml \
+            | sed -E 's/^[[:space:]]*-[[:space:]]*//' \
+            > Proxy_Domain.txt
+
+          # DOMAIN-KEYWORD 单独保留
+          grep -E \
+            '^[[:space:]]*-[[:space:]]*DOMAIN-KEYWORD,' \
+            Proxy_Classical.yaml \
+            | sed -E 's/^[[:space:]]*-[[:space:]]*//' \
+            >> Proxy_Domain.txt || true
+
+          # 去掉空行和注释
+          sed -i '/^[[:space:]]*#/d' Proxy_Domain.txt
+          sed -i '/^[[:space:]]*$/d' Proxy_Domain.txt
+
+          # 去重
+          sort -fu Proxy_Domain.txt -o Proxy_Domain.txt
+
+
+      # =========================================================
+      # 7. 提取 Proxy IP
+      #
+      # IP-CIDR
+      # IP-CIDR6
+      # =========================================================
+      - name: Extract Proxy IP
+        run: |
+          set -e
+
+          grep -E \
+            '^[[:space:]]*-[[:space:]]*IP-CIDR(6)?,' \
+            Proxy_Classical.yaml \
+            | sed -E 's/^[[:space:]]*-[[:space:]]*//' \
+            > Proxy_IP.txt
+
+          sed -i '/^[[:space:]]*#/d' Proxy_IP.txt
+          sed -i '/^[[:space:]]*$/d' Proxy_IP.txt
+
+          sort -fu Proxy_IP.txt -o Proxy_IP.txt
+
+
+      # =========================================================
+      # 8. 清理 China Domain
+      # =========================================================
+      - name: Clean China Domain
+        run: |
+          set -e
+
+          sed -i '/^[[:space:]]*#/d' China_Domain.txt
+          sed -i '/^[[:space:]]*$/d' China_Domain.txt
+
+          sort -fu China_Domain.txt -o China_Domain.txt
+
+
+      # =========================================================
+      # 9. 清理 China IP
+      # =========================================================
+      - name: Clean China IP
+        run: |
+          set -e
+
+          sed -i '/^[[:space:]]*#/d' China_IP.txt
+          sed -i '/^[[:space:]]*$/d' China_IP.txt
+
+          sort -fu China_IP.txt -o China_IP.txt
+
+
+      # =========================================================
+      # 10. 生成 China_Domain.mrs
+      #
+      # MRS:
+      # behavior = domain
+      # input    = text
+      # =========================================================
+      - name: Build China Domain MRS
+        run: |
+          set -e
+
+          ./mihomo convert-ruleset \
+            domain \
+            text \
+            China_Domain.txt \
+            China_Domain.mrs
+
+
+      # =========================================================
+      # 11. 生成 China_IP.mrs
+      #
+      # behavior = ipcidr
+      # input    = text
+      # =========================================================
+      - name: Build China IP MRS
+        run: |
+          set -e
+
+          ./mihomo convert-ruleset \
+            ipcidr \
+            text \
+            China_IP.txt \
+            China_IP.mrs
+
+
+      # =========================================================
+      # 12. 生成 Proxy_Domain.mrs
+      #
+      # 注意：
+      # DOMAIN-KEYWORD 无法进入 MRS domain。
+      #
+      # 因此：
+      # Proxy_Domain.txt
+      #     ↓
+      # 只提取 DOMAIN / DOMAIN-SUFFIX
+      #     ↓
+      # Proxy_Domain.mrs
+      # =========================================================
+      - name: Build Proxy Domain MRS
+        run: |
+          set -e
+
+          grep -E \
+            '^(DOMAIN|DOMAIN-SUFFIX),' \
+            Proxy_Domain.txt \
+            | sed -E 's/^DOMAIN,//' \
+            | sed -E 's/^DOMAIN-SUFFIX/,/' \
+            | sed 's/^,//' \
+            | sort -fu \
+            > Proxy_Domain_MRS_Source.txt
+
+          ./mihomo convert-ruleset \
+            domain \
+            text \
+            Proxy_Domain_MRS_Source.txt \
+            Proxy_Domain.mrs
+
+
+      # =========================================================
+      # 13. 生成 Proxy_IP.mrs
+      # =========================================================
+      - name: Build Proxy IP MRS
+        run: |
+          set -e
+
+          sed -E \
+            's/^IP-CIDR6,//' \
+            Proxy_IP.txt \
+            | sed -E 's/^IP-CIDR,//' \
+            | sort -fu \
+            > Proxy_IP_MRS_Source.txt
+
+          ./mihomo convert-ruleset \
+            ipcidr \
+            text \
+            Proxy_IP_MRS_Source.txt \
+            Proxy_IP.mrs
+
+
+      # =========================================================
+      # 14. 添加 TXT 文件头
+      # =========================================================
+      - name: Add Headers
+        run: |
+          set -e
+
+          {
+            echo "# NAME: China Domain"
+            echo "# SOURCE: blackmatrix7/ios_rule_script"
+            echo "# TYPE: DOMAIN"
+            echo "# UPDATED: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo ""
+            cat China_Domain.txt
+          } > China_Domain.tmp
+
+          mv China_Domain.tmp China_Domain.txt
+
+
+          {
+            echo "# NAME: China IP"
+            echo "# SOURCE: blackmatrix7/ios_rule_script"
+            echo "# TYPE: IP-CIDR / IP-CIDR6"
+            echo "# UPDATED: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo ""
+            cat China_IP.txt
+          } > China_IP.tmp
+
+          mv China_IP.tmp China_IP.txt
+
+
+          {
+            echo "# NAME: Proxy Domain"
+            echo "# SOURCE: blackmatrix7/ios_rule_script"
+            echo "# TYPE: DOMAIN / DOMAIN-SUFFIX / DOMAIN-KEYWORD"
+            echo "# UPDATED: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo ""
+            cat Proxy_Domain.txt
+          } > Proxy_Domain.tmp
+
+          mv Proxy_Domain.tmp Proxy_Domain.txt
+
+
+          {
+            echo "# NAME: Proxy IP"
+            echo "# SOURCE: blackmatrix7/ios_rule_script"
+            echo "# TYPE: IP-CIDR / IP-CIDR6"
+            echo "# UPDATED: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo ""
+            cat Proxy_IP.txt
+          } > Proxy_IP.tmp
+
+          mv Proxy_IP.tmp Proxy_IP.txt
+
+
+      # =========================================================
+      # 15. 检查 MRS 文件
+      # =========================================================
+      - name: Verify MRS
+        run: |
+          set -e
+
+          echo "=========================================="
+          echo "MRS FILES"
+          echo "=========================================="
+
+          ls -lh \
+            China_Domain.mrs \
+            China_IP.mrs \
+            Proxy_Domain.mrs \
+            Proxy_IP.mrs
+
+          echo ""
+          echo "=========================================="
+          echo "TEXT STATISTICS"
+          echo "=========================================="
+
+          echo "China Domain:"
+          grep -v '^#' China_Domain.txt | grep -v '^$' | wc -l
+
+          echo "China IP:"
+          grep -v '^#' China_IP.txt | grep -v '^$' | wc -l
+
+          echo "Proxy Domain:"
+          grep -v '^#' Proxy_Domain.txt | grep -v '^$' | wc -l
+
+          echo "Proxy IP:"
+          grep -v '^#' Proxy_IP.txt | grep -v '^$' | wc -l
+
+          echo ""
+          echo "=========================================="
+          echo "MRS SHA256"
+          echo "=========================================="
+
+          sha256sum \
+            China_Domain.mrs \
+            China_IP.mrs \
+            Proxy_Domain.mrs \
+            Proxy_IP.mrs
+
+
+      # =========================================================
+      # 16. 发布 release 分支
+      # =========================================================
+      - name: Publish rules
+        run: |
+          set -e
+
+          rm -rf publish
+
+          mkdir -p publish
+
+          cp China_Domain.txt publish/
+          cp China_IP.txt publish/
+
+          cp Proxy_Domain.txt publish/
+          cp Proxy_IP.txt publish/
+
+          cp China_Domain.mrs publish/
+          cp China_IP.mrs publish/
+
+          cp Proxy_Domain.mrs publish/
+          cp Proxy_IP.mrs publish/
+
+          cd publish
+
+          git init
+
+          git config --local user.name \
+            "github-actions[bot]"
+
+          git config --local user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b release
+
+          git add .
+
+          git commit \
+            -m "Update China and Proxy rules $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+          git remote add origin \
+            "https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}"
+
+          git push -f -u origin release
