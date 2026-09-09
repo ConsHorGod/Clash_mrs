@@ -16,55 +16,171 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download ChinaMax and custom rules
+      - name: Download rules
         run: |
           mkdir -p ruleset
 
-          curl -L \
+          echo "===== Download ChinaMax ====="
+
+          curl -fL \
             "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/ChinaMax/ChinaMax_Domain.txt" \
             -o /tmp/ChinaMax_Domain.txt
 
-          curl -L \
+          curl -fL \
             "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/ChinaMax/ChinaMax_IP.txt" \
             -o /tmp/ChinaMax_IP.txt
 
-          curl -L \
+          echo "===== Download custom rules ====="
+
+          curl -fL \
             "https://raw.githubusercontent.com/ConsHorGod/my-config/refs/heads/配置文件/Clash_DIRECT.txt" \
             -o /tmp/Clash_DIRECT.txt
 
-          curl -L \
+          curl -fL \
             "https://raw.githubusercontent.com/ConsHorGod/my-config/refs/heads/配置文件/Clash_PROXY.txt" \
             -o /tmp/Clash_PROXY.txt
 
-          curl -L \
+          curl -fL \
             "https://raw.githubusercontent.com/ConsHorGod/my-config/refs/heads/配置文件/Clash_REJECT.txt" \
             -o /tmp/Clash_REJECT.txt
 
+          echo "===== Download check ====="
+
+          echo "ChinaMax_Domain:"
+          wc -l /tmp/ChinaMax_Domain.txt
+
+          echo "ChinaMax_IP:"
+          wc -l /tmp/ChinaMax_IP.txt
+
+          echo "Clash_DIRECT:"
+          wc -l /tmp/Clash_DIRECT.txt
+
+          echo "Clash_PROXY:"
+          wc -l /tmp/Clash_PROXY.txt
+
+          echo "Clash_REJECT:"
+          wc -l /tmp/Clash_REJECT.txt
+
       - name: Download mihomo
         run: |
-          VERSION=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r .tag_name)
+          echo "===== Get latest mihomo ====="
 
-          URL=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+          VERSION=$(curl -fsSL \
+            https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+            | jq -r '.tag_name')
+
+          URL=$(curl -fsSL \
+            https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
             | jq -r '.assets[].browser_download_url' \
             | grep 'linux-amd64' \
             | grep -E '\.gz$' \
             | head -n 1)
 
-          echo "Mihomo version: ${VERSION}"
-          echo "Download URL: ${URL}"
+          echo "Version: ${VERSION}"
+          echo "URL: ${URL}"
 
-          wget -q "$URL" -O /tmp/mihomo.gz
+          test -n "$URL"
 
-          gunzip /tmp/mihomo.gz
+          curl -fL "$URL" -o /tmp/mihomo.gz
+
+          gunzip -f /tmp/mihomo.gz
+
           chmod +x /tmp/mihomo
 
-      - name: Convert Domain to MRS
+          /tmp/mihomo -v
+
+      - name: Convert ChinaMax Domain to MRS
+        run: |
+          python3 - <<'PY'
+          import re
+
+          src = "/tmp/ChinaMax_Domain.txt"
+          out = "/tmp/ChinaMax_Domain.yaml"
+
+          domains = set()
+
+          with open(src, "r", encoding="utf-8") as f:
+              for line in f:
+                  line = line.strip()
+
+                  if not line or line.startswith("#"):
+                      continue
+
+                  m = re.match(r"^DOMAIN-SUFFIX,(.+)$", line, re.I)
+                  if m:
+                      domains.add(m.group(1).split(",")[0].strip())
+                      continue
+
+                  m = re.match(r"^DOMAIN,(.+)$", line, re.I)
+                  if m:
+                      domains.add(m.group(1).split(",")[0].strip())
+                      continue
+
+                  if "," not in line and "/" not in line:
+                      domains.add(line)
+
+          with open(out, "w", encoding="utf-8") as f:
+              f.write("payload:\n")
+              for domain in sorted(domains):
+                  f.write(f'  - "{domain}"\n')
+
+          print(f"ChinaMax Domain rules: {len(domains)}")
+          PY
+
+          /tmp/mihomo convert-ruleset domain yaml \
+            /tmp/ChinaMax_Domain.yaml \
+            ruleset/ChinaMax_Domain.mrs
+
+      - name: Convert ChinaMax IP to MRS
+        run: |
+          python3 - <<'PY'
+          import re
+
+          src = "/tmp/ChinaMax_IP.txt"
+          out = "/tmp/ChinaMax_IP.yaml"
+
+          cidrs = set()
+
+          with open(src, "r", encoding="utf-8") as f:
+              for line in f:
+                  line = line.strip()
+
+                  if not line or line.startswith("#"):
+                      continue
+
+                  m = re.match(r"^IP-CIDR6?,(.+?)(?:,.*)?$", line, re.I)
+                  if m:
+                      cidrs.add(m.group(1).strip())
+                      continue
+
+                  if re.match(
+                      r"^(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}$",
+                      line
+                  ):
+                      cidrs.add(line)
+                      continue
+
+                  if ":" in line and "/" in line:
+                      cidrs.add(line)
+
+          with open(out, "w", encoding="utf-8") as f:
+              f.write("payload:\n")
+              for cidr in sorted(cidrs):
+                  f.write(f'  - "{cidr}"\n')
+
+          print(f"ChinaMax IP rules: {len(cidrs)}")
+          PY
+
+          /tmp/mihomo convert-ruleset ipcidr yaml \
+            /tmp/ChinaMax_IP.yaml \
+            ruleset/ChinaMax_IP.mrs
+
+      - name: Convert custom Domain rules to MRS
         run: |
           python3 - <<'PY'
           import re
 
           files = [
-              ("ChinaMax_Domain.txt", "ChinaMax_Domain.yaml"),
               ("Clash_DIRECT.txt", "Clash_DIRECT.yaml"),
               ("Clash_PROXY.txt", "Clash_PROXY.yaml"),
               ("Clash_REJECT.txt", "Clash_REJECT.yaml"),
@@ -86,20 +202,20 @@ jobs:
                       # DOMAIN-SUFFIX,example.com
                       m = re.match(r"^DOMAIN-SUFFIX,(.+)$", line, re.I)
                       if m:
-                          domains.add(m.group(1).strip())
+                          domain = m.group(1).split(",")[0].strip()
+                          if domain:
+                              domains.add(domain)
                           continue
 
                       # DOMAIN,example.com
                       m = re.match(r"^DOMAIN,(.+)$", line, re.I)
                       if m:
-                          domains.add(m.group(1).strip())
+                          domain = m.group(1).split(",")[0].strip()
+                          if domain:
+                              domains.add(domain)
                           continue
 
-                      # DOMAIN-KEYWORD 不转换
-                      if line.upper().startswith("DOMAIN-KEYWORD,"):
-                          continue
-
-                      # 兼容单独域名
+                      # 单独域名
                       if "," not in line and "/" not in line:
                           domains.add(line)
 
@@ -110,10 +226,6 @@ jobs:
 
               print(f"{src_name}: {len(domains)} domain rules")
           PY
-
-          /tmp/mihomo convert-ruleset domain yaml \
-            /tmp/ChinaMax_Domain.yaml \
-            ruleset/ChinaMax_Domain.mrs
 
           /tmp/mihomo convert-ruleset domain yaml \
             /tmp/Clash_DIRECT.yaml \
@@ -127,60 +239,24 @@ jobs:
             /tmp/Clash_REJECT.yaml \
             ruleset/Clash_REJECT.mrs
 
-      - name: Convert IP to MRS
+      - name: Check MRS files
         run: |
-          python3 - <<'PY'
-          import re
+          echo "===== MRS files ====="
 
-          src = "/tmp/ChinaMax_IP.txt"
-          out = "/tmp/ChinaMax_IP.yaml"
+          ls -lh ruleset/*.mrs
 
-          cidrs = set()
+          echo ""
+          echo "===== MRS sizes ====="
 
-          with open(src, "r", encoding="utf-8") as f:
-              for line in f:
-                  line = line.strip()
-
-                  if not line or line.startswith("#"):
-                      continue
-
-                  # IP-CIDR / IP-CIDR6
-                  m = re.match(r"^IP-CIDR6?,(.+?)(?:,.*)?$", line, re.I)
-                  if m:
-                      cidrs.add(m.group(1).strip())
-                      continue
-
-                  # 直接 IPv4 CIDR
-                  if re.match(
-                      r"^(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}$",
-                      line
-                  ):
-                      cidrs.add(line)
-                      continue
-
-                  # IPv6 CIDR
-                  if ":" in line and "/" in line:
-                      cidrs.add(line)
-
-          with open(out, "w", encoding="utf-8") as f:
-              f.write("payload:\n")
-              for cidr in sorted(cidrs):
-                  f.write(f'  - "{cidr}"\n')
-
-          print(f"IP rules: {len(cidrs)}")
-          PY
-
-          /tmp/mihomo convert-ruleset ipcidr yaml \
-            /tmp/ChinaMax_IP.yaml \
-            ruleset/ChinaMax_IP.mrs
-
-      - name: Check output
-        run: |
-          echo "===== Generated MRS ====="
-          ls -lh ruleset/
-
-          echo "===== File sizes ====="
           du -h ruleset/*.mrs
+
+          echo ""
+          echo "===== File count ====="
+
+          find ruleset -name "*.mrs" | wc -l
+
+          echo ""
+          echo "Expected: 5 MRS files"
 
       - name: Commit changes
         run: |
