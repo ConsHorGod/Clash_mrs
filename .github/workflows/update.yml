@@ -20,7 +20,7 @@ jobs:
       # 1. 拉取自己的仓库
       # ========================================
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # ========================================
       # 2. 安装依赖
@@ -84,8 +84,6 @@ jobs:
       # DOMAIN
       # DOMAIN-SUFFIX
       # DOMAIN-KEYWORD
-      #
-      # 转换器需要 Clash Classical YAML
       # ========================================
       - name: Extract domain rules
         run: |
@@ -143,8 +141,8 @@ jobs:
       # IP-CIDR
       # IP-CIDR6
       #
-      # 注意：
-      # 这里只保留 CIDR 本身
+      # 重要：
+      # 只保留 CIDR 本身
       #
       # IP-CIDR,1.2.3.0/24
       # ↓
@@ -210,6 +208,8 @@ jobs:
       # ========================================
       - name: Check extracted rules
         run: |
+          set -e
+
           echo "========== Domain =========="
           cat source/Proxy_Domain.yaml
 
@@ -218,7 +218,8 @@ jobs:
           cat source/Proxy_IP.yaml
 
           echo
-          echo "========== 统计 =========="
+          echo "========== 规则统计 =========="
+
           echo "Domain:"
           grep -c "^  -" source/Proxy_Domain.yaml || true
 
@@ -247,6 +248,8 @@ jobs:
         run: |
           set -e
 
+          mkdir -p output
+
           ./tools/mihomo convert-ruleset \
             ipcidr \
             yaml \
@@ -254,13 +257,13 @@ jobs:
             output/Proxy_IP.mrs
 
       # ========================================
-      # 10. 检查生成结果
+      # 10. 检查 MRS
       # ========================================
       - name: Check output
         run: |
           set -e
 
-          echo "========== 文件 =========="
+          echo "========== MRS 文件 =========="
           ls -lh output/
 
           echo
@@ -268,7 +271,7 @@ jobs:
           sha256sum output/*.mrs
 
           echo
-          echo "========== 规则统计 =========="
+          echo "========== 规则数量 =========="
 
           echo "Domain:"
           grep -c "^  -" source/Proxy_Domain.yaml || true
@@ -277,12 +280,12 @@ jobs:
           grep -c "^  -" source/Proxy_IP.yaml || true
 
           echo
-          echo "========== MRS 文件大小 =========="
+          echo "========== 文件大小 =========="
 
           stat -c "%n %s bytes" output/*.mrs
 
       # ========================================
-      # 11. 发布到自己的仓库
+      # 11. 提交到自己的仓库
       # ========================================
       - name: Commit and push
         run: |
