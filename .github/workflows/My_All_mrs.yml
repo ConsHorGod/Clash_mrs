@@ -1,8 +1,7 @@
-name: Update All MRS
+name: Update My_all MRS
 
 on:
   schedule:
-    # 每天北京时间 06:00
     - cron: "0 22 * * *"
   workflow_dispatch:
 
@@ -10,189 +9,193 @@ permissions:
   contents: write
 
 jobs:
-  update-mrs:
+  build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create directory
+      - name: Download ChinaMax and custom rules
         run: |
           mkdir -p ruleset
 
-      - name: Download source rules
-        run: |
-          set -e
-
-          curl -fL \
+          curl -L \
             "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/ChinaMax/ChinaMax_Domain.txt" \
             -o /tmp/ChinaMax_Domain.txt
 
-          curl -fL \
+          curl -L \
             "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/ChinaMax/ChinaMax_IP.txt" \
             -o /tmp/ChinaMax_IP.txt
 
-          curl -fL \
-            "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Proxy/Proxy_Domain.txt" \
-            -o /tmp/Proxy_Domain.txt
-
-          curl -fL \
-            "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Proxy/Proxy_IP.txt" \
-            -o /tmp/Proxy_IP.txt
-
-          curl -fL \
+          curl -L \
             "https://raw.githubusercontent.com/ConsHorGod/my-config/refs/heads/配置文件/Clash_DIRECT.txt" \
             -o /tmp/Clash_DIRECT.txt
 
-          curl -fL \
+          curl -L \
             "https://raw.githubusercontent.com/ConsHorGod/my-config/refs/heads/配置文件/Clash_PROXY.txt" \
             -o /tmp/Clash_PROXY.txt
 
-          curl -fL \
+          curl -L \
             "https://raw.githubusercontent.com/ConsHorGod/my-config/refs/heads/配置文件/Clash_REJECT.txt" \
             -o /tmp/Clash_REJECT.txt
 
-      - name: Download latest Mihomo
+      - name: Download mihomo
         run: |
-          set -e
+          VERSION=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r .tag_name)
 
-          URL=$(curl -fsSL \
-            https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
-            | jq -r '
-              .assets[]
-              | select(.name | test("^mihomo-linux-amd64(-compatible)?-.*\\.gz$"))
-              | .browser_download_url
-            ' \
+          URL=$(curl -s https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+            | jq -r '.assets[].browser_download_url' \
+            | grep 'linux-amd64' \
+            | grep -E '\.gz$' \
             | head -n 1)
 
-          if [ -z "$URL" ] || [ "$URL" = "null" ]; then
-            echo "Mihomo Linux AMD64 asset not found"
-            exit 1
-          fi
+          echo "Mihomo version: ${VERSION}"
+          echo "Download URL: ${URL}"
 
-          echo "Downloading:"
-          echo "$URL"
+          wget -q "$URL" -O /tmp/mihomo.gz
 
-          curl -fL "$URL" -o /tmp/mihomo.gz
-
-          gunzip -f /tmp/mihomo.gz
+          gunzip /tmp/mihomo.gz
           chmod +x /tmp/mihomo
 
-          /tmp/mihomo -v
-
-      - name: Convert ChinaMax Domain
+      - name: Convert Domain to MRS
         run: |
-          set -e
+          python3 - <<'PY'
+          import re
 
-          /tmp/mihomo convert-ruleset \
-            domain \
-            text \
-            /tmp/ChinaMax_Domain.txt \
+          files = [
+              ("ChinaMax_Domain.txt", "ChinaMax_Domain.yaml"),
+              ("Clash_DIRECT.txt", "Clash_DIRECT.yaml"),
+              ("Clash_PROXY.txt", "Clash_PROXY.yaml"),
+              ("Clash_REJECT.txt", "Clash_REJECT.yaml"),
+          ]
+
+          for src_name, out_name in files:
+              src = "/tmp/" + src_name
+              out = "/tmp/" + out_name
+
+              domains = set()
+
+              with open(src, "r", encoding="utf-8") as f:
+                  for line in f:
+                      line = line.strip()
+
+                      if not line or line.startswith("#"):
+                          continue
+
+                      # DOMAIN-SUFFIX,example.com
+                      m = re.match(r"^DOMAIN-SUFFIX,(.+)$", line, re.I)
+                      if m:
+                          domains.add(m.group(1).strip())
+                          continue
+
+                      # DOMAIN,example.com
+                      m = re.match(r"^DOMAIN,(.+)$", line, re.I)
+                      if m:
+                          domains.add(m.group(1).strip())
+                          continue
+
+                      # DOMAIN-KEYWORD 不转换
+                      if line.upper().startswith("DOMAIN-KEYWORD,"):
+                          continue
+
+                      # 兼容单独域名
+                      if "," not in line and "/" not in line:
+                          domains.add(line)
+
+              with open(out, "w", encoding="utf-8") as f:
+                  f.write("payload:\n")
+                  for domain in sorted(domains):
+                      f.write(f'  - "{domain}"\n')
+
+              print(f"{src_name}: {len(domains)} domain rules")
+          PY
+
+          /tmp/mihomo convert-ruleset domain yaml \
+            /tmp/ChinaMax_Domain.yaml \
             ruleset/ChinaMax_Domain.mrs
 
-      - name: Convert ChinaMax IP
-        run: |
-          set -e
-
-          /tmp/mihomo convert-ruleset \
-            ipcidr \
-            text \
-            /tmp/ChinaMax_IP.txt \
-            ruleset/ChinaMax_IP.mrs
-
-      - name: Convert Proxy Domain
-        run: |
-          set -e
-
-          /tmp/mihomo convert-ruleset \
-            domain \
-            text \
-            /tmp/Proxy_Domain.txt \
-            ruleset/Proxy_Domain.mrs
-
-      - name: Convert Proxy IP
-        run: |
-          set -e
-
-          /tmp/mihomo convert-ruleset \
-            ipcidr \
-            text \
-            /tmp/Proxy_IP.txt \
-            ruleset/Proxy_IP.mrs
-
-      - name: Convert DIRECT
-        run: |
-          set -e
-
-          /tmp/mihomo convert-ruleset \
-            domain \
-            text \
-            /tmp/Clash_DIRECT.txt \
+          /tmp/mihomo convert-ruleset domain yaml \
+            /tmp/Clash_DIRECT.yaml \
             ruleset/Clash_DIRECT.mrs
 
-      - name: Convert PROXY
-        run: |
-          set -e
-
-          /tmp/mihomo convert-ruleset \
-            domain \
-            text \
-            /tmp/Clash_PROXY.txt \
+          /tmp/mihomo convert-ruleset domain yaml \
+            /tmp/Clash_PROXY.yaml \
             ruleset/Clash_PROXY.mrs
 
-      - name: Convert REJECT
-        run: |
-          set -e
-
-          /tmp/mihomo convert-ruleset \
-            domain \
-            text \
-            /tmp/Clash_REJECT.txt \
+          /tmp/mihomo convert-ruleset domain yaml \
+            /tmp/Clash_REJECT.yaml \
             ruleset/Clash_REJECT.mrs
 
-      - name: Validate MRS
+      - name: Convert IP to MRS
         run: |
-          set -e
+          python3 - <<'PY'
+          import re
 
-          echo "========== Generated MRS =========="
+          src = "/tmp/ChinaMax_IP.txt"
+          out = "/tmp/ChinaMax_IP.yaml"
 
+          cidrs = set()
+
+          with open(src, "r", encoding="utf-8") as f:
+              for line in f:
+                  line = line.strip()
+
+                  if not line or line.startswith("#"):
+                      continue
+
+                  # IP-CIDR / IP-CIDR6
+                  m = re.match(r"^IP-CIDR6?,(.+?)(?:,.*)?$", line, re.I)
+                  if m:
+                      cidrs.add(m.group(1).strip())
+                      continue
+
+                  # 直接 IPv4 CIDR
+                  if re.match(
+                      r"^(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}$",
+                      line
+                  ):
+                      cidrs.add(line)
+                      continue
+
+                  # IPv6 CIDR
+                  if ":" in line and "/" in line:
+                      cidrs.add(line)
+
+          with open(out, "w", encoding="utf-8") as f:
+              f.write("payload:\n")
+              for cidr in sorted(cidrs):
+                  f.write(f'  - "{cidr}"\n')
+
+          print(f"IP rules: {len(cidrs)}")
+          PY
+
+          /tmp/mihomo convert-ruleset ipcidr yaml \
+            /tmp/ChinaMax_IP.yaml \
+            ruleset/ChinaMax_IP.mrs
+
+      - name: Check output
+        run: |
+          echo "===== Generated MRS ====="
           ls -lh ruleset/
 
-          echo
-          echo "========== File Type =========="
+          echo "===== File sizes ====="
+          du -h ruleset/*.mrs
 
-          file ruleset/*.mrs
-
-          echo
-          echo "========== File Size =========="
-
-          wc -c ruleset/*.mrs
-
-          echo
-          echo "========== MRS Count =========="
-
-          COUNT=$(find ruleset -name "*.mrs" | wc -l)
-
-          if [ "$COUNT" -ne 7 ]; then
-            echo "ERROR: Expected 7 MRS files, found $COUNT"
-            exit 1
-          fi
-
-          echo "7 MRS files generated successfully."
-
-      - name: Commit and Push
+      - name: Commit changes
         run: |
-          set -e
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add ruleset/
+          git add ruleset/ChinaMax_Domain.mrs
+          git add ruleset/ChinaMax_IP.mrs
+          git add ruleset/Clash_DIRECT.mrs
+          git add ruleset/Clash_PROXY.mrs
+          git add ruleset/Clash_REJECT.mrs
 
           if git diff --cached --quiet; then
-            echo "No changes detected."
+            echo "No changes."
           else
-            git commit -m "Update all MRS rules"
+            git commit -m "Update ChinaMax and custom MRS"
             git push
           fi
