@@ -1,0 +1,148 @@
+name: Update All MRS
+
+on:
+  schedule:
+    - cron: "0 22 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-mrs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create directories
+        run: |
+          mkdir -p ruleset
+
+      - name: Download source rules
+        run: |
+          set -e
+
+          curl -fL \
+            "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/ChinaMax/ChinaMax_Domain.txt" \
+            -o /tmp/ChinaMax_Domain.txt
+
+          curl -fL \
+            "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/ChinaMax/ChinaMax_IP.txt" \
+            -o /tmp/ChinaMax_IP.txt
+
+          curl -fL \
+            "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Proxy/Proxy_Domain.txt" \
+            -o /tmp/Proxy_Domain.txt
+
+          curl -fL \
+            "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Proxy/Proxy_IP.txt" \
+            -o /tmp/Proxy_IP.txt
+
+          curl -fL \
+            "https://raw.githubusercontent.com/ConsHorGod/my-config/refs/heads/配置文件/Clash_DIRECT.txt" \
+            -o /tmp/Clash_DIRECT.txt
+
+          curl -fL \
+            "https://raw.githubusercontent.com/ConsHorGod/my-config/refs/heads/配置文件/Clash_PROXY.txt" \
+            -o /tmp/Clash_PROXY.txt
+
+          curl -fL \
+            "https://raw.githubusercontent.com/ConsHorGod/my-config/refs/heads/配置文件/Clash_REJECT.txt" \
+            -o /tmp/Clash_REJECT.txt
+
+      - name: Download latest Mihomo
+        run: |
+          set -e
+
+          VERSION=$(curl -fsSL \
+            https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
+            | jq -r '.tag_name')
+
+          echo "Mihomo version: ${VERSION}"
+
+          curl -fL \
+            "https://github.com/MetaCubeX/mihomo/releases/download/${VERSION}/mihomo-linux-amd64-compatible-${VERSION}.gz" \
+            -o /tmp/mihomo.gz
+
+          gunzip -f /tmp/mihomo.gz
+          chmod +x /tmp/mihomo
+
+          /tmp/mihomo -v
+
+      - name: Convert ChinaMax Domain
+        run: |
+          /tmp/mihomo convert-ruleset domain text \
+            /tmp/ChinaMax_Domain.txt \
+            ruleset/ChinaMax_Domain.mrs
+
+      - name: Convert ChinaMax IP
+        run: |
+          /tmp/mihomo convert-ruleset ipcidr text \
+            /tmp/ChinaMax_IP.txt \
+            ruleset/ChinaMax_IP.mrs
+
+      - name: Convert Proxy Domain
+        run: |
+          /tmp/mihomo convert-ruleset domain text \
+            /tmp/Proxy_Domain.txt \
+            ruleset/Proxy_Domain.mrs
+
+      - name: Convert Proxy IP
+        run: |
+          /tmp/mihomo convert-ruleset ipcidr text \
+            /tmp/Proxy_IP.txt \
+            ruleset/Proxy_IP.mrs
+
+      - name: Convert DIRECT
+        run: |
+          /tmp/mihomo convert-ruleset domain text \
+            /tmp/Clash_DIRECT.txt \
+            ruleset/Clash_DIRECT.mrs
+
+      - name: Convert PROXY
+        run: |
+          /tmp/mihomo convert-ruleset domain text \
+            /tmp/Clash_PROXY.txt \
+            ruleset/Clash_PROXY.mrs
+
+      - name: Convert REJECT
+        run: |
+          /tmp/mihomo convert-ruleset domain text \
+            /tmp/Clash_REJECT.txt \
+            ruleset/Clash_REJECT.mrs
+
+      - name: Check MRS
+        run: |
+          set -e
+
+          echo "========== MRS =========="
+
+          ls -lh ruleset/*.mrs
+
+          echo
+          echo "========== FILE TYPE =========="
+
+          file ruleset/*.mrs
+
+          echo
+          echo "========== SIZE =========="
+
+          wc -c ruleset/*.mrs
+
+      - name: Commit and Push
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add ruleset/
+
+          if git diff --cached --quiet; then
+            echo "No changes detected."
+          else
+            git commit -m "Update all MRS rules"
+            git push
+          fi
