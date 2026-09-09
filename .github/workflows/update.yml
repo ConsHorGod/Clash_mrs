@@ -1,29 +1,35 @@
 name: Update Proxy MRS
+
 on:
   schedule:
     # 每天北京时间 06:00
     # GitHub Actions 使用 UTC，所以这里是 UTC 22:00
     - cron: "0 22 * * *"
-  # 允许手动执行
   workflow_dispatch:
+
 permissions:
   contents: write
+
 jobs:
   update:
     runs-on: ubuntu-latest
+
     steps:
+
       # ========================================
       # 1. 拉取自己的仓库
       # ========================================
       - name: Checkout repository
         uses: actions/checkout@v4
+
       # ========================================
-      # 2. 安装 jq
+      # 2. 安装依赖
       # ========================================
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq curl gzip
+          sudo apt-get install -y jq curl gzip python3 python3-yaml
+
       # ========================================
       # 3. 下载最新版 mihomo
       # ========================================
@@ -31,7 +37,9 @@ jobs:
         shell: bash
         run: |
           set -e
+
           mkdir -p tools
+
           URL=$(curl -fsSL \
             https://api.github.com/repos/MetaCubeX/mihomo/releases/latest \
             | jq -r '
@@ -43,144 +51,251 @@ jobs:
               | .browser_download_url
             ' \
             | head -n 1)
+
           if [ -z "$URL" ]; then
             echo "找不到 mihomo Linux amd64 compatible 版本"
             exit 1
           fi
+
           echo "下载：$URL"
+
           curl -fL "$URL" -o tools/mihomo.gz
+
           gunzip -f tools/mihomo.gz
+
           chmod +x tools/mihomo
+
           ./tools/mihomo -v
+
       # ========================================
       # 4. 下载 BlackMatrix7 Proxy_Classical.yaml
       # ========================================
       - name: Download Proxy_Classical.yaml
         run: |
           mkdir -p source
+
           curl -fL \
             "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Proxy/Proxy_Classical.yaml" \
             -o source/Proxy_Classical.yaml
+
       # ========================================
       # 5. 提取 Domain 规则
       #
       # DOMAIN
       # DOMAIN-SUFFIX
+      # DOMAIN-KEYWORD
       #
-      # 转成 MRS domain
+      # 转换器需要 Clash Classical YAML
       # ========================================
       - name: Extract domain rules
         run: |
-          mkdir -p output
           python3 <<'PY'
           import yaml
-          with open(
-              "source/Proxy_Classical.yaml",
-              "r",
-              encoding="utf-8"
-          ) as f:
+
+          INPUT = "source/Proxy_Classical.yaml"
+          OUTPUT = "source/Proxy_Domain.yaml"
+
+          with open(INPUT, "r", encoding="utf-8") as f:
               data = yaml.safe_load(f)
+
           payload = data.get("payload", [])
+
           domains = []
+          seen = set()
+
           for rule in payload:
               rule = str(rule).strip()
+
+              if not rule:
+                  continue
+
               if rule.startswith("DOMAIN,"):
-                  domains.append(rule)
+                  value = rule.split(",", 1)[1].strip()
+
               elif rule.startswith("DOMAIN-SUFFIX,"):
-                  domains.append(rule)
-          with open(
-              "source/Proxy_Domain.yaml",
-              "w",
-              encoding="utf-8"
-          ) as f:
+                  value = rule.split(",", 1)[1].strip()
+
+              elif rule.startswith("DOMAIN-KEYWORD,"):
+                  value = rule.split(",", 1)[1].strip()
+
+              else:
+                  continue
+
+              if not value:
+                  continue
+
+              if value not in seen:
+                  seen.add(value)
+                  domains.append(value)
+
+          with open(OUTPUT, "w", encoding="utf-8") as f:
               f.write("payload:\n")
-              for rule in domains:
-                  f.write(f"  - {rule}\n")
+
+              for domain in domains:
+                  f.write(f"  - {domain}\n")
+
           print(f"Domain rules: {len(domains)}")
           PY
+
       # ========================================
       # 6. 提取 IP 规则
       #
       # IP-CIDR
       # IP-CIDR6
       #
-      # 转成 MRS ipcidr
+      # 注意：
+      # 这里只保留 CIDR 本身
+      #
+      # IP-CIDR,1.2.3.0/24
+      # ↓
+      # 1.2.3.0/24
       # ========================================
       - name: Extract IP rules
         run: |
           python3 <<'PY'
           import yaml
-          with open(
-              "source/Proxy_Classical.yaml",
-              "r",
-              encoding="utf-8"
-          ) as f:
+          import ipaddress
+
+          INPUT = "source/Proxy_Classical.yaml"
+          OUTPUT = "source/Proxy_IP.yaml"
+
+          with open(INPUT, "r", encoding="utf-8") as f:
               data = yaml.safe_load(f)
+
           payload = data.get("payload", [])
+
           ip_rules = []
+          seen = set()
+
           for rule in payload:
               rule = str(rule).strip()
+
+              if not rule:
+                  continue
+
               if rule.startswith("IP-CIDR,"):
-                  ip_rules.append(rule)
+                  value = rule.split(",", 1)[1].strip()
+
               elif rule.startswith("IP-CIDR6,"):
-                  ip_rules.append(rule)
-          with open(
-              "source/Proxy_IP.yaml",
-              "w",
-              encoding="utf-8"
-          ) as f:
+                  value = rule.split(",", 1)[1].strip()
+
+              else:
+                  continue
+
+              if not value:
+                  continue
+
+              try:
+                  network = ipaddress.ip_network(value, strict=False)
+                  value = str(network)
+              except ValueError:
+                  print(f"跳过无效 CIDR: {value}")
+                  continue
+
+              if value not in seen:
+                  seen.add(value)
+                  ip_rules.append(value)
+
+          with open(OUTPUT, "w", encoding="utf-8") as f:
               f.write("payload:\n")
-              for rule in ip_rules:
-                  f.write(f"  - {rule}\n")
+
+              for cidr in ip_rules:
+                  f.write(f"  - {cidr}\n")
+
           print(f"IP rules: {len(ip_rules)}")
           PY
+
       # ========================================
-      # 7. 转换 Domain → MRS
+      # 7. 检查提取结果
+      # ========================================
+      - name: Check extracted rules
+        run: |
+          echo "========== Domain =========="
+          cat source/Proxy_Domain.yaml
+
+          echo
+          echo "========== IP =========="
+          cat source/Proxy_IP.yaml
+
+          echo
+          echo "========== 统计 =========="
+          echo "Domain:"
+          grep -c "^  -" source/Proxy_Domain.yaml || true
+
+          echo "IP:"
+          grep -c "^  -" source/Proxy_IP.yaml || true
+
+      # ========================================
+      # 8. 转换 Domain → MRS
       # ========================================
       - name: Convert Domain to MRS
         run: |
+          set -e
+
+          mkdir -p output
+
           ./tools/mihomo convert-ruleset \
             domain \
             yaml \
             source/Proxy_Domain.yaml \
             output/Proxy_Domain.mrs
+
       # ========================================
-      # 8. 转换 IP → MRS
+      # 9. 转换 IP → MRS
       # ========================================
       - name: Convert IP to MRS
         run: |
+          set -e
+
           ./tools/mihomo convert-ruleset \
             ipcidr \
             yaml \
             source/Proxy_IP.yaml \
             output/Proxy_IP.mrs
+
       # ========================================
-      # 9. 检查生成结果
+      # 10. 检查生成结果
       # ========================================
       - name: Check output
         run: |
+          set -e
+
           echo "========== 文件 =========="
           ls -lh output/
+
           echo
           echo "========== SHA256 =========="
           sha256sum output/*.mrs
+
           echo
           echo "========== 规则统计 =========="
+
           echo "Domain:"
           grep -c "^  -" source/Proxy_Domain.yaml || true
+
           echo "IP:"
           grep -c "^  -" source/Proxy_IP.yaml || true
+
+          echo
+          echo "========== MRS 文件大小 =========="
+
+          stat -c "%n %s bytes" output/*.mrs
+
       # ========================================
-      # 10. 发布到自己的仓库
+      # 11. 发布到自己的仓库
       # ========================================
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git add output/*.mrs
+
           if git diff --cached --quiet; then
             echo "规则没有变化，不提交"
             exit 0
           fi
+
           git commit -m "chore: update Proxy MRS"
+
           git push
