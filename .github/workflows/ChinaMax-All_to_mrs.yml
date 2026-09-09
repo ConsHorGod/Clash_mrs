@@ -1,4 +1,4 @@
-name: Update ChinaMax MRS
+name: Update ChinaMax_all MRS
 
 on:
   schedule:
