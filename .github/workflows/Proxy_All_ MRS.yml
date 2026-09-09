@@ -2,8 +2,6 @@ name: Update Proxy MRS
 
 on:
   schedule:
-    # 每天北京时间 06:00
-    # GitHub Actions 使用 UTC，所以这里是 UTC 22:00
     - cron: "0 22 * * *"
   workflow_dispatch:
 
@@ -16,23 +14,14 @@ jobs:
 
     steps:
 
-      # ========================================
-      # 1. 拉取自己的仓库
-      # ========================================
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      # ========================================
-      # 2. 安装依赖
-      # ========================================
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y jq curl gzip python3 python3-yaml
 
-      # ========================================
-      # 3. 下载最新版 mihomo
-      # ========================================
       - name: Download latest mihomo
         shell: bash
         run: |
@@ -60,16 +49,11 @@ jobs:
           echo "下载：$URL"
 
           curl -fL "$URL" -o tools/mihomo.gz
-
           gunzip -f tools/mihomo.gz
-
           chmod +x tools/mihomo
 
           ./tools/mihomo -v
 
-      # ========================================
-      # 4. 下载 BlackMatrix7 Proxy_Classical.yaml
-      # ========================================
       - name: Download Proxy_Classical.yaml
         run: |
           mkdir -p source
@@ -78,14 +62,7 @@ jobs:
             "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Proxy/Proxy_Classical.yaml" \
             -o source/Proxy_Classical.yaml
 
-      # ========================================
-      # 5. 提取 Domain 规则
-      #
-      # DOMAIN
-      # DOMAIN-SUFFIX
-      # DOMAIN-KEYWORD
-      # ========================================
-      - name: Extract domain rules
+      - name: Extract Domain rules
         run: |
           python3 <<'PY'
           import yaml
@@ -113,18 +90,20 @@ jobs:
               elif rule.startswith("DOMAIN-SUFFIX,"):
                   value = rule.split(",", 1)[1].strip()
 
-              elif rule.startswith("DOMAIN-KEYWORD,"):
-                  value = rule.split(",", 1)[1].strip()
-
               else:
                   continue
 
               if not value:
                   continue
 
+              value = value.lower()
+
               if value not in seen:
                   seen.add(value)
                   domains.append(value)
+
+          if not domains:
+              raise SystemExit("没有找到任何有效 Domain 规则")
 
           with open(OUTPUT, "w", encoding="utf-8") as f:
               f.write("payload:\n")
@@ -135,19 +114,6 @@ jobs:
           print(f"Domain rules: {len(domains)}")
           PY
 
-      # ========================================
-      # 6. 提取 IP 规则
-      #
-      # IP-CIDR
-      # IP-CIDR6
-      #
-      # 重要：
-      # 只保留 CIDR 本身
-      #
-      # IP-CIDR,1.2.3.0/24
-      # ↓
-      # 1.2.3.0/24
-      # ========================================
       - name: Extract IP rules
         run: |
           python3 <<'PY'
@@ -194,6 +160,9 @@ jobs:
                   seen.add(value)
                   ip_rules.append(value)
 
+          if not ip_rules:
+              raise SystemExit("没有找到任何有效 IP-CIDR 规则")
+
           with open(OUTPUT, "w", encoding="utf-8") as f:
               f.write("payload:\n")
 
@@ -203,32 +172,6 @@ jobs:
           print(f"IP rules: {len(ip_rules)}")
           PY
 
-      # ========================================
-      # 7. 检查提取结果
-      # ========================================
-      - name: Check extracted rules
-        run: |
-          set -e
-
-          echo "========== Domain =========="
-          cat source/Proxy_Domain.yaml
-
-          echo
-          echo "========== IP =========="
-          cat source/Proxy_IP.yaml
-
-          echo
-          echo "========== 规则统计 =========="
-
-          echo "Domain:"
-          grep -c "^  -" source/Proxy_Domain.yaml || true
-
-          echo "IP:"
-          grep -c "^  -" source/Proxy_IP.yaml || true
-
-      # ========================================
-      # 8. 转换 Domain → MRS
-      # ========================================
       - name: Convert Domain to MRS
         run: |
           set -e
@@ -241,9 +184,6 @@ jobs:
             source/Proxy_Domain.yaml \
             output/Proxy_Domain.mrs
 
-      # ========================================
-      # 9. 转换 IP → MRS
-      # ========================================
       - name: Convert IP to MRS
         run: |
           set -e
@@ -256,14 +196,11 @@ jobs:
             source/Proxy_IP.yaml \
             output/Proxy_IP.mrs
 
-      # ========================================
-      # 10. 检查 MRS
-      # ========================================
       - name: Check output
         run: |
           set -e
 
-          echo "========== MRS 文件 =========="
+          echo "========== MRS =========="
           ls -lh output/
 
           echo
@@ -271,22 +208,17 @@ jobs:
           sha256sum output/*.mrs
 
           echo
-          echo "========== 规则数量 =========="
-
-          echo "Domain:"
+          echo "========== Domain =========="
           grep -c "^  -" source/Proxy_Domain.yaml || true
 
-          echo "IP:"
+          echo
+          echo "========== IP =========="
           grep -c "^  -" source/Proxy_IP.yaml || true
 
           echo
           echo "========== 文件大小 =========="
-
           stat -c "%n %s bytes" output/*.mrs
 
-      # ========================================
-      # 11. 提交到自己的仓库
-      # ========================================
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
@@ -295,10 +227,9 @@ jobs:
           git add output/*.mrs
 
           if git diff --cached --quiet; then
-            echo "规则没有变化，不提交"
+            echo "Proxy 规则没有变化，不提交"
             exit 0
           fi
 
           git commit -m "chore: update Proxy MRS"
-
           git push
