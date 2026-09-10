@@ -1,4 +1,4 @@
-name: Update ChinaMax_all MRS
+name: Update blackmatrix7 to MRS
 
 on:
   schedule:
@@ -16,7 +16,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download ChinaMax rules
+      - name: Download ChinaMax and Proxy rules
         run: |
           mkdir -p ruleset
 
@@ -27,6 +27,10 @@ jobs:
           curl -L \
             "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/ChinaMax/ChinaMax_IP.txt" \
             -o /tmp/ChinaMax_IP.txt
+
+          curl -L \
+            "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Proxy/Proxy_Domain.txt" \
+            -o /tmp/Proxy_Domain.txt
 
       - name: Download mihomo
         run: |
@@ -39,7 +43,9 @@ jobs:
           gunzip /tmp/mihomo.gz
           chmod +x /tmp/mihomo
 
-      - name: Convert Domain to MRS
+          /tmp/mihomo -v
+
+      - name: Convert ChinaMax Domain to MRS
         run: |
           python3 - <<'PY'
           import re
@@ -68,8 +74,7 @@ jobs:
                       domains.add(m.group(1).strip())
                       continue
 
-                  # DOMAIN-KEYWORD 不适合直接放进 domain MRS，
-                  # 因为 MRS domain 规则集不是 keyword 规则集
+                  # DOMAIN-KEYWORD 不适合直接放进 domain MRS
                   if line.upper().startswith("DOMAIN-KEYWORD,"):
                       continue
 
@@ -82,14 +87,14 @@ jobs:
               for domain in sorted(domains):
                   f.write(f'  - "{domain}"\n')
 
-          print(f"Domain rules: {len(domains)}")
+          print(f"ChinaMax Domain rules: {len(domains)}")
           PY
 
           /tmp/mihomo convert-ruleset domain yaml \
             /tmp/ChinaMax_Domain.yaml \
             ruleset/ChinaMax_Domain.mrs
 
-      - name: Convert IP to MRS
+      - name: Convert ChinaMax IP to MRS
         run: |
           python3 - <<'PY'
           import re
@@ -106,13 +111,13 @@ jobs:
                   if not line or line.startswith("#"):
                       continue
 
-                  # IP-CIDR,1.2.3.0/24
+                  # IP-CIDR / IP-CIDR6
                   m = re.match(r"^IP-CIDR6?,(.+?)(?:,.*)?$", line, re.I)
                   if m:
                       cidrs.add(m.group(1).strip())
                       continue
 
-                  # 直接 CIDR
+                  # 直接 IPv4 CIDR
                   if re.match(
                       r"^(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}$",
                       line
@@ -129,17 +134,73 @@ jobs:
               for cidr in sorted(cidrs):
                   f.write(f'  - "{cidr}"\n')
 
-          print(f"IP rules: {len(cidrs)}")
+          print(f"ChinaMax IP rules: {len(cidrs)}")
           PY
 
           /tmp/mihomo convert-ruleset ipcidr yaml \
             /tmp/ChinaMax_IP.yaml \
             ruleset/ChinaMax_IP.mrs
 
+      - name: Convert Proxy Domain to MRS
+        run: |
+          python3 - <<'PY'
+          import re
+
+          src = "/tmp/Proxy_Domain.txt"
+          out = "/tmp/Proxy_Domain.yaml"
+
+          domains = set()
+
+          with open(src, "r", encoding="utf-8") as f:
+              for line in f:
+                  line = line.strip()
+
+                  if not line or line.startswith("#"):
+                      continue
+
+                  # DOMAIN-SUFFIX,example.com
+                  m = re.match(r"^DOMAIN-SUFFIX,(.+)$", line, re.I)
+                  if m:
+                      domains.add(m.group(1).strip())
+                      continue
+
+                  # DOMAIN,example.com
+                  m = re.match(r"^DOMAIN,(.+)$", line, re.I)
+                  if m:
+                      domains.add(m.group(1).strip())
+                      continue
+
+                  # DOMAIN-KEYWORD 无法直接转换为 domain MRS
+                  if line.upper().startswith("DOMAIN-KEYWORD,"):
+                      continue
+
+                  # 兼容单独域名
+                  if "," not in line and "/" not in line:
+                      domains.add(line)
+
+          with open(out, "w", encoding="utf-8") as f:
+              f.write("payload:\n")
+              for domain in sorted(domains):
+                  f.write(f'  - "{domain}"\n')
+
+          print(f"Proxy Domain rules: {len(domains)}")
+          PY
+
+          /tmp/mihomo convert-ruleset domain yaml \
+            /tmp/Proxy_Domain.yaml \
+            ruleset/Proxy_Domain.mrs
+
       - name: Check output
         run: |
+          echo "===== MRS files ====="
           ls -lh ruleset/ChinaMax_Domain.mrs
           ls -lh ruleset/ChinaMax_IP.mrs
+          ls -lh ruleset/Proxy_Domain.mrs
+
+          echo "===== File type ====="
+          file ruleset/ChinaMax_Domain.mrs
+          file ruleset/ChinaMax_IP.mrs
+          file ruleset/Proxy_Domain.mrs
 
       - name: Commit changes
         run: |
@@ -148,10 +209,11 @@ jobs:
 
           git add ruleset/ChinaMax_Domain.mrs
           git add ruleset/ChinaMax_IP.mrs
+          git add ruleset/Proxy_Domain.mrs
 
           if git diff --cached --quiet; then
             echo "No changes."
           else
-            git commit -m "Update ChinaMax MRS"
+            git commit -m "Update ChinaMax and Proxy MRS"
             git push
           fi
