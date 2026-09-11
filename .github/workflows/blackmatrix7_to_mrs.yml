@@ -16,7 +16,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download ChinaMax and Proxy rules
+      - name: Download blackmatrix7 rules
         run: |
           mkdir -p ruleset
 
@@ -31,6 +31,14 @@ jobs:
           curl -L \
             "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/Proxy/Proxy_Domain.txt" \
             -o /tmp/Proxy_Domain.txt
+
+          curl -L \
+            "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/TikTok/TikTok.yaml" \
+            -o ruleset/TikTok.yaml
+
+          curl -L \
+            "https://raw.githubusercontent.com/blackmatrix7/ios_rule_script/refs/heads/master/rule/Clash/HBO/HBO_No_Resolve.yaml" \
+            -o ruleset/HBO_No_Resolve.yaml
 
       - name: Download mihomo
         run: |
